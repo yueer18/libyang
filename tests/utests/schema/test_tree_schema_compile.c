@@ -161,6 +161,88 @@ test_module(void **state)
 }
 
 static void
+test_name_collisions(void **state)
+{
+    (void) state; /* unused */
+
+    struct ly_ctx *ctx;
+    const char *yang_data;
+
+    assert_int_equal(LY_SUCCESS, ly_ctx_new(NULL, LY_CTX_DISABLE_SEARCHDIRS, &ctx));
+
+    /* top-level */
+    yang_data = "module a {namespace urn:a;prefix a;"
+            "container c;"
+            "leaf a {type empty;}"
+            "leaf c {type empty;}"
+        "}";
+    assert_int_equal(LY_EVALID, lys_parse_mem(ctx, yang_data, LYS_IN_YANG, NULL));
+    logbuf_assert("Duplicate identifier \"c\" of data definition/RPC/action/notification statement. /a:c");
+    logbuf_clean();
+
+    yang_data = "module a {namespace urn:a;prefix a;"
+            "container c;"
+            "leaf a {type empty;}"
+            "notification c;"
+        "}";
+    assert_int_equal(LY_EVALID, lys_parse_mem(ctx, yang_data, LYS_IN_YANG, NULL));
+    logbuf_assert("Duplicate identifier \"c\" of data definition/RPC/action/notification statement. /a:c");
+    logbuf_clean();
+
+    yang_data = "module a {namespace urn:a;prefix a;"
+            "container c;"
+            "leaf a {type empty;}"
+            "rpc c;"
+        "}";
+    assert_int_equal(LY_EVALID, lys_parse_mem(ctx, yang_data, LYS_IN_YANG, NULL));
+    logbuf_assert("Duplicate identifier \"c\" of data definition/RPC/action/notification statement. /a:c");
+    logbuf_clean();
+
+    yang_data = "module a {namespace urn:a;prefix a;"
+            "container c;"
+            "leaf a {type empty;}"
+            "choice ch {"
+                "leaf c {type string;}"
+                "case c2 {"
+                    "leaf aa {type empty;}"
+                "}"
+            "}"
+        "}";
+    assert_int_equal(LY_EVALID, lys_parse_mem(ctx, yang_data, LYS_IN_YANG, NULL));
+    logbuf_assert("Duplicate identifier \"c\" of data definition/RPC/action/notification statement. /a:ch/c/c");
+    logbuf_clean();
+
+    /* nested */
+    yang_data = "module a {namespace urn:a;prefix a;container c { list l {key \"k\"; leaf k {type string;}"
+            "leaf-list a {type string;}"
+            "container a;"
+        "}}}";
+    assert_int_equal(LY_EVALID, lys_parse_mem(ctx, yang_data, LYS_IN_YANG, NULL));
+    logbuf_assert("Duplicate identifier \"a\" of data definition/RPC/action/notification statement. /a:c/l/a");
+    logbuf_clean();
+
+    yang_data = "module a {yang-version 1.1;namespace urn:a;prefix a;container c { list l {key \"k\"; leaf k {type string;}"
+            "leaf-list a {type string;}"
+            "notification a;"
+        "}}}";
+    assert_int_equal(LY_EVALID, lys_parse_mem(ctx, yang_data, LYS_IN_YANG, NULL));
+    logbuf_assert("Duplicate identifier \"a\" of data definition/RPC/action/notification statement. /a:c/l/a");
+    logbuf_clean();
+
+    yang_data = "module a {yang-version 1.1;namespace urn:a;prefix a;container c { list l {key \"k\"; leaf k {type string;}"
+            "leaf-list a {type string;}"
+            "action a;"
+        "}}}";
+    assert_int_equal(LY_EVALID, lys_parse_mem(ctx, yang_data, LYS_IN_YANG, NULL));
+    logbuf_assert("Duplicate identifier \"a\" of data definition/RPC/action/notification statement. /a:c/l/a");
+    logbuf_clean();
+
+    /* grouping */
+
+    ly_ctx_destroy(ctx, NULL);
+}
+
+static void
 test_node_container(void **state)
 {
     (void) state; /* unused */
@@ -3296,6 +3378,7 @@ int main(void)
 {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test_setup_teardown(test_module, logger_setup, logger_teardown),
+        cmocka_unit_test_setup_teardown(test_name_collisions, logger_setup, logger_teardown),
         cmocka_unit_test_setup_teardown(test_type_length, logger_setup, logger_teardown),
         cmocka_unit_test_setup_teardown(test_type_range, logger_setup, logger_teardown),
         cmocka_unit_test_setup_teardown(test_type_pattern, logger_setup, logger_teardown),

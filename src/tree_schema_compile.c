@@ -3169,37 +3169,32 @@ lys_compile_status(struct lysc_ctx *ctx, uint16_t *node_flags, uint16_t parent_f
  * structures, but they share the namespace so we need to check their name collisions.
  *
  * @param[in] ctx Compile context.
- * @param[in] children List (linked list) of data nodes to go through.
- * @param[in] actions List (sized array) of actions or RPCs to go through.
- * @param[in] notifs List (sized array) of Notifications to go through.
+ * @param[in] parent Parent of the nodes to go through. Used for nested nodes.
+ * @param[in] mod Compiled module. Used for top-level nodes.
  * @param[in] name Name of the item to find in the given lists.
  * @param[in] exclude Pointer to an object to exclude from the name checking - for the case that the object
  * with the @p name being checked is already inserted into one of the list so we need to skip it when searching for duplicity.
  * @return LY_SUCCESS in case of unique name, LY_EEXIST otherwise.
  */
 static LY_ERR
-lys_compile_node_uniqness(struct lysc_ctx *ctx, const struct lysc_node *children, const struct lysc_action *actions,
-                          const struct lysc_notif *notifs, const char *name, void *exclude)
+lys_compile_node_uniqness(struct lysc_ctx *ctx, const struct lysc_node *parent, const struct lysc_module *mod,
+                          const char *name, void *exclude)
 {
     const struct lysc_node *iter;
-    LY_ARRAY_COUNT_TYPE u;
 
-    LY_LIST_FOR(children, iter) {
+    /* adjust parent */
+    if (parent && (parent->nodetype & (LYS_CHOICE | LYS_CASE))) {
+        parent = lysc_data_parent(parent);
+    }
+
+    iter = NULL;
+    while ((iter = lys_getnext(iter, parent, mod, LYS_GETNEXT_NOSTATECHECK))) {
         if (iter != exclude && iter->module == ctx->mod && !strcmp(name, iter->name)) {
             goto error;
         }
     }
-    LY_ARRAY_FOR(actions, u) {
-        if (&actions[u] != exclude && actions[u].module == ctx->mod && !strcmp(name, actions[u].name)) {
-            goto error;
-        }
-    }
-    LY_ARRAY_FOR(notifs, u) {
-        if (&notifs[u] != exclude && notifs[u].module == ctx->mod && !strcmp(name, notifs[u].name)) {
-            goto error;
-        }
-    }
     return LY_SUCCESS;
+
 error:
     LOGVAL(ctx->ctx, LY_VLOG_STR, ctx->path, LY_VCODE_DUPIDENT, name, "data definition/RPC/action/notification");
     return LY_EEXIST;
@@ -3228,20 +3223,6 @@ lys_compile_action(struct lysc_ctx *ctx, struct lysp_action *action_p,
 
     lysc_update_path(ctx, parent, action_p->name);
 
-    if (lys_compile_node_uniqness(ctx, parent ? lysc_node_children(parent, 0) : ctx->mod->compiled->data,
-                                  parent ? lysc_node_actions(parent) : ctx->mod->compiled->rpcs,
-                                  parent ? lysc_node_notifs(parent) : ctx->mod->compiled->notifs,
-                                  action_p->name, action)) {
-        return LY_EVALID;
-    }
-
-    if (ctx->options & (LYSC_OPT_RPC_MASK | LYSC_OPT_NOTIFICATION)) {
-        LOGVAL(ctx->ctx, LY_VLOG_STR, ctx->path, LYVE_SEMANTICS,
-               "Action \"%s\" is placed inside %s.", action_p->name,
-               ctx->options & LYSC_OPT_RPC_MASK ? "another RPC/action" : "notification");
-        return LY_EVALID;
-    }
-
     action->nodetype = parent ? LYS_ACTION : LYS_RPC;
     action->module = ctx->mod;
     action->parent = parent;
@@ -3257,6 +3238,18 @@ lys_compile_action(struct lysc_ctx *ctx, struct lysp_action *action_p,
     DUP_STRING(ctx->ctx, action_p->name, action->name);
     DUP_STRING(ctx->ctx, action_p->dsc, action->dsc);
     DUP_STRING(ctx->ctx, action_p->ref, action->ref);
+
+    if (lys_compile_node_uniqness(ctx, parent, ctx->mod->compiled, action_p->name, action)) {
+        return LY_EVALID;
+    }
+
+    if (ctx->options & (LYSC_OPT_RPC_MASK | LYSC_OPT_NOTIFICATION)) {
+        LOGVAL(ctx->ctx, LY_VLOG_STR, ctx->path, LYVE_SEMANTICS,
+               "Action \"%s\" is placed inside %s.", action_p->name,
+               ctx->options & LYSC_OPT_RPC_MASK ? "another RPC/action" : "notification");
+        return LY_EVALID;
+    }
+
     COMPILE_ARRAY_GOTO(ctx, action_p->iffeatures, action->iffeatures, u, lys_compile_iffeature, ret, cleanup);
     COMPILE_EXTS_GOTO(ctx, action_p->exts, action->exts, action, LYEXT_PAR_NODE, ret, cleanup);
 
@@ -3313,20 +3306,6 @@ lys_compile_notif(struct lysc_ctx *ctx, struct lysp_notif *notif_p,
 
     lysc_update_path(ctx, parent, notif_p->name);
 
-    if (lys_compile_node_uniqness(ctx, parent ? lysc_node_children(parent, 0) : ctx->mod->compiled->data,
-                                  parent ? lysc_node_actions(parent) : ctx->mod->compiled->rpcs,
-                                  parent ? lysc_node_notifs(parent) : ctx->mod->compiled->notifs,
-                                  notif_p->name, notif)) {
-        return LY_EVALID;
-    }
-
-    if (ctx->options & (LYSC_OPT_RPC_MASK | LYSC_OPT_NOTIFICATION)) {
-        LOGVAL(ctx->ctx, LY_VLOG_STR, ctx->path, LYVE_SEMANTICS,
-               "Notification \"%s\" is placed inside %s.", notif_p->name,
-               ctx->options & LYSC_OPT_RPC_MASK ? "RPC/action" : "another notification");
-        return LY_EVALID;
-    }
-
     notif->nodetype = LYS_NOTIF;
     notif->module = ctx->mod;
     notif->parent = parent;
@@ -3342,6 +3321,18 @@ lys_compile_notif(struct lysc_ctx *ctx, struct lysp_notif *notif_p,
     DUP_STRING(ctx->ctx, notif_p->name, notif->name);
     DUP_STRING(ctx->ctx, notif_p->dsc, notif->dsc);
     DUP_STRING(ctx->ctx, notif_p->ref, notif->ref);
+
+    if (lys_compile_node_uniqness(ctx, parent, ctx->mod->compiled, notif_p->name, notif)) {
+        return LY_EVALID;
+    }
+
+    if (ctx->options & (LYSC_OPT_RPC_MASK | LYSC_OPT_NOTIFICATION)) {
+        LOGVAL(ctx->ctx, LY_VLOG_STR, ctx->path, LYVE_SEMANTICS,
+               "Notification \"%s\" is placed inside %s.", notif_p->name,
+               ctx->options & LYSC_OPT_RPC_MASK ? "RPC/action" : "another notification");
+        return LY_EVALID;
+    }
+
     COMPILE_ARRAY_GOTO(ctx, notif_p->iffeatures, notif->iffeatures, u, lys_compile_iffeature, ret, cleanup);
     COMPILE_ARRAY_GOTO(ctx, notif_p->musts, notif->musts, u, lys_compile_must, ret, cleanup);
     if (notif_p->musts && !(ctx->options & LYSC_OPT_GROUPING)) {
@@ -4114,12 +4105,11 @@ lys_compile_node_connect(struct lysc_ctx *ctx, struct lysc_node *parent, struct 
                 node->prev = (*children)->prev;
                 (*children)->prev = node;
             }
+        }
 
-            /* check the name uniqueness */
-            if (lys_compile_node_uniqness(ctx, *children, lysc_node_actions(parent),
-                                          lysc_node_notifs(parent), node->name, node)) {
-                return LY_EEXIST;
-            }
+        /* check the name uniqueness */
+        if (lys_compile_node_uniqness(ctx, parent, parent->module->compiled, node->name, node)) {
+            return LY_EEXIST;
         }
     }
     return LY_SUCCESS;
@@ -5441,8 +5431,7 @@ lys_compile_node(struct lysc_ctx *ctx, struct lysp_node *node_p, struct lysc_nod
             ctx->mod->compiled->data->prev = node;
         }
         lysc_update_path(ctx, parent, node->name);
-        if (lys_compile_node_uniqness(ctx, ctx->mod->compiled->data, ctx->mod->compiled->rpcs,
-                                      ctx->mod->compiled->notifs, node->name, node)) {
+        if (lys_compile_node_uniqness(ctx, NULL, ctx->mod->compiled, node->name, node)) {
             return LY_EVALID;
         }
     }
